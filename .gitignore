@@ -1,0 +1,15 @@
+/target
+!.gitignore
+/crates/*/target
+/gamesupport/**/build/
+/gamesupport/**/.gradle/
+supabase/.temp/
+*.log
+crash-reports/
+.env
+*.dmp
+*.minidump
+backup/
+*.part
+.DS_Store
+node_modules/

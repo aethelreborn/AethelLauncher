@@ -1,0 +1,67 @@
+[workspace]
+members = [
+    "crates/launcher-core",
+    "crates/launcher-ui",
+    "crates/launcher-bin",
+    "crates/backend",
+]
+resolver = "2"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.82"
+
+[workspace.dependencies]
+# Async runtime
+tokio = { version = "1.42", features = ["full"] }
+# HTTP
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "stream", "json"] }
+# Serialization
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+# Error handling
+anyhow = "1"
+thiserror = "2"
+# Logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+# UUID
+uuid = { version = "1", features = ["v3", "v4", "serde"] }
+# Crypto / hashing
+sha2 = "0.10"
+sha1 = "0.10"
+md-5 = "0.10"
+rand = "0.8"
+# Keyring
+# Database
+sqlx = { version = "0.8", features = ["postgres", "runtime-tokio", "tls-rustls", "migrate"] }
+rusqlite = { version = "0.32", features = ["bundled"] }
+# JWT
+jsonwebtoken = "9"
+# GUI
+egui = "0.31"
+eframe = { version = "0.31", default-features = false, features = ["wgpu", "default_fonts", "wayland"] }
+wgpu = "23"
+# Backend
+axum = { version = "0.7", features = ["macros"] }
+tower-http = { version = "0.5", features = ["cors", "trace", "compression-br"] }
+moka = { version = "0.12", features = ["future"] }
+# IPC
+tokio-tungstenite = { version = "0.26", features = ["tokio-rustls", "rustls-tls-native-roots"] }
+# Self-update
+self_update = { version = "0.41", default-features = false, features = ["archive-tar", "compression-flate2", "rustls"] }
+# Crash reporting
+sentry = { version = "0.34", features = ["tracing"] }
+# Other
+dirs = "5"
+parking_lot = "0.12"
+futures-util = "0.3"
+hex = "0.4"
+chrono = { version = "0.4", features = ["serde"] }
+
+[profile.release]
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true
