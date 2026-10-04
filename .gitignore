@@ -1,0 +1,16 @@
+/target
+!.gitignore
+/crates/*/target
+/gamesupport/**/build/
+/gamesupport/**/.gradle/
+/gamesupport/ipc-client/out/
+supabase/.temp/
+*.log
+crash-reports/
+.env
+*.dmp
+*.minidump
+backup/
+*.part
+.DS_Store
+node_modules/

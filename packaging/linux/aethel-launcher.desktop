@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Name=Aethel
+GenericName=Minecraft Launcher
+Comment=Launch and manage Minecraft with Aethel
+Exec=aethel-launcher
+TryExec=aethel-launcher
+Terminal=false
+Categories=Game;
+Keywords=minecraft;launcher;
+StartupWMClass=aethel-launcher
+Icon=aethel-launcher

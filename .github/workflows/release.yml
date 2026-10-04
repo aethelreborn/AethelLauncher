@@ -1,0 +1,120 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            artifact: linux-x64.tar.gz
+            key: linux-x64
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            artifact: windows-x64.zip
+            key: windows-x64-portable
+          - os: macos-latest
+            target: x86_64-apple-darwin
+            artifact: macos-x64.tar.gz
+            key: macos-x64
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            artifact: macos-arm64.tar.gz
+            key: macos-arm64
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+      - name: Build launcher
+        run: cargo build --release --locked --target ${{ matrix.target }} -p launcher-bin
+      - name: Package artifact
+        shell: bash
+        env:
+          ARTIFACT: ${{ matrix.artifact }}
+          TARGET: ${{ matrix.target }}
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            SRC="target/$TARGET/release/aethel-launcher.exe"
+          else
+            SRC="target/$TARGET/release/aethel-launcher"
+          fi
+          test -f "$SRC" || { echo "expected binary missing: $SRC" >&2; ls -la "target/$TARGET/release" >&2 || true; exit 1; }
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            cp "$SRC" dist/aethel-launcher.exe
+          else
+            cp "$SRC" dist/aethel-launcher
+            chmod +x dist/aethel-launcher
+          fi
+          case "$ARTIFACT" in
+            *.zip)
+              if [ "${{ runner.os }}" = "Windows" ]; then
+                powershell -NoProfile -Command "Compress-Archive -Path 'dist/*' -DestinationPath '$ARTIFACT' -Force"
+              else
+                (cd dist && zip -qr "../$ARTIFACT" .)
+              fi
+              ;;
+            *) tar czf "$ARTIFACT" -C dist . ;;
+          esac
+          rm -rf dist
+      - name: Checksum + manifest fragment
+        shell: bash
+        env:
+          ARTIFACT: ${{ matrix.artifact }}
+          KEY: ${{ matrix.key }}
+          BASE_URL: https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}
+        run: python3 packaging/manifest_fragment.py "$ARTIFACT" "$KEY" "$BASE_URL"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: meta-${{ matrix.target }}
+          path: |
+            ${{ matrix.artifact }}.sha256
+            frag-*.json
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            ${{ matrix.artifact }}
+            ${{ matrix.artifact }}.sha256
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  update-manifest:
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: meta-*
+          merge-multiple: true
+          path: meta
+      - name: Assemble SHA256SUMS + update manifest
+        env:
+          VERSION: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          cat meta/*.sha256 > SHA256SUMS
+          python3 packaging/assemble_manifest.py meta "$VERSION" update-manifest.json
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            SHA256SUMS
+            update-manifest.json
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

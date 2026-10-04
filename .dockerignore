@@ -1,0 +1,9 @@
+.git/
+target/
+dist/
+gamesupport/ipc-client/out/
+*.log
+.env
+*.dmp
+*.minidump
+backup/

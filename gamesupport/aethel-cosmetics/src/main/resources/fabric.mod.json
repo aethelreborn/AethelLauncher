@@ -1,0 +1,23 @@
+{
+  "schemaVersion": 1,
+  "id": "aethel-cosmetics",
+  "version": "${version}",
+  "name": "Aethel Cosmetics",
+  "description": "Applies store cosmetics in-game via the skin API round-trip (doc 11 §3).",
+  "authors": [
+    "Aethel"
+  ],
+  "license": "Proprietary",
+  "environment": "client",
+  "entrypoints": {
+    "client": [
+      "dev.aethel.cosmetics.AethelCosmeticsMod"
+    ]
+  },
+  "depends": {
+    "fabricloader": ">=0.16.0",
+    "minecraft": "~1.21.11",
+    "java": ">=21",
+    "fabric-api": "*"
+  }
+}

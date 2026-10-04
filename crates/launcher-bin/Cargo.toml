@@ -1,0 +1,21 @@
+[package]
+name = "launcher-bin"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[[bin]]
+name = "aethel-launcher"
+path = "src/main.rs"
+
+[dependencies]
+launcher-core = { path = "../launcher-core" }
+launcher-ui = { path = "../launcher-ui" }
+eframe = { workspace = true }
+egui = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+tokio = { workspace = true }
+parking_lot = { workspace = true }
+dirs = { workspace = true }
+anyhow = { workspace = true }

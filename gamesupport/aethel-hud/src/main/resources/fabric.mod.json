@@ -1,0 +1,23 @@
+{
+  "schemaVersion": 1,
+  "id": "aethel-hud",
+  "version": "${version}",
+  "name": "Aethel HUD",
+  "description": "In-game HUD modules, keybinds and click GUI for Aethel (docs 11/18).",
+  "authors": [
+    "Aethel"
+  ],
+  "license": "Proprietary",
+  "environment": "client",
+  "entrypoints": {
+    "client": [
+      "dev.aethel.hud.AethelHudMod"
+    ]
+  },
+  "depends": {
+    "fabricloader": ">=0.16.0",
+    "minecraft": "~1.21.11",
+    "java": ">=21",
+    "fabric-api": "*"
+  }
+}
