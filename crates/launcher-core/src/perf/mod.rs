@@ -77,6 +77,9 @@ pub struct PerfReport {
     pub requested: bool,
     pub loader: Option<String>,
     pub installed_mods: usize,
+    /// The bundled in-game client mods (cosmetics, HUD/click GUI) written into `mods/`.
+    #[serde(default)]
+    pub client_mods: Vec<String>,
     pub renderer: Option<String>,
     pub renderer_pack: Option<String>,
     pub skipped_mods: Vec<String>,

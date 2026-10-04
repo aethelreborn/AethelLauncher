@@ -316,6 +316,31 @@ async fn install_performance_pack(
                 progress(Progress::Log(format!("⚠ {message}")));
             }
         }
+
+        // The in-game client (capes, wings, click GUI) ships inside the launcher, so it installs
+        // with no Modrinth round-trip and always matches this build.
+        if report.loader.is_some() {
+            progress(Progress::Stage("Installing Aethel client mods".to_string()));
+            match crate::client_mods::install_client_mods(&mods_dir).await {
+                Ok(installed) => {
+                    report.client_mods = installed.iter().map(|m| m.name.clone()).collect();
+                    progress(Progress::Log(format!(
+                        "Aethel client installed: {}",
+                        installed
+                            .iter()
+                            .map(|m| m.name.as_str())
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    )));
+                }
+                Err(e) => {
+                    let message = format!("client mods failed to install: {e:#}");
+                    tracing::warn!("{message}");
+                    report.failures.push(message.clone());
+                    progress(Progress::Log(format!("⚠ {message}")));
+                }
+            }
+        }
     }
 
     let tuned = perf_options::TunedOptions::for_preset(

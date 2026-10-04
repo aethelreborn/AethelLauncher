@@ -1,5 +1,6 @@
 pub mod auth;
 pub mod bundle;
+pub mod client_mods;
 pub mod install;
 pub mod instance;
 pub mod launch;
