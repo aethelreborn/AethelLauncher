@@ -18,6 +18,7 @@ use theme::{ButtonKind, MotionPrefs};
 pub struct AethelApp {
     model: AppModel,
     reduced_motion: bool,
+    autoplay_done: bool,
 }
 
 impl AethelApp {
@@ -82,6 +83,7 @@ impl AethelApp {
         Self {
             model,
             reduced_motion,
+            autoplay_done: false,
         }
     }
 }
@@ -92,6 +94,23 @@ impl eframe::App for AethelApp {
         self.model.library.poll_background();
         self.model.launch.poll();
         self.model.store.poll();
+
+        // Headless QA aid: launch the selected instance as soon as one is ready.
+        if !self.autoplay_done
+            && std::env::var_os("AETHEL_AUTOPLAY").is_some()
+            && self.model.home.pending_instance.is_some()
+        {
+            self.autoplay_done = true;
+            let request = self.model.home.launch_request(&self.model.auth);
+            self.model.launch.start(request);
+            self.model.active_screen = Screen::Home;
+        }
+
+        if self.model.launch.take_needs_cosmetics_push() || self.model.store.cosmetics_changed {
+            self.model.store.cosmetics_changed = false;
+            let documents = self.model.store.client().equipped_documents();
+            self.model.launch.push_cosmetics(documents);
+        }
         self.model.mods.poll();
         if let Some(key) = self.model.mods.persist_cf_key.take() {
             self.model.config.curseforge_api_key = key;

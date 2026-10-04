@@ -3,7 +3,7 @@
   "id": "aethel-cosmetics",
   "version": "${version}",
   "name": "Aethel Cosmetics",
-  "description": "Applies store cosmetics in-game via the skin API round-trip (doc 11 §3).",
+  "description": "Renders Aethel store capes and wings on players in-game (docs 11 \u00a73).",
   "authors": [
     "Aethel"
   ],
@@ -19,5 +19,10 @@
     "minecraft": "~1.21.11",
     "java": ">=21",
     "fabric-api": "*"
+  },
+  "mixins": {
+    "client": [
+      "aethel_cosmetics.mixins.json"
+    ]
   }
 }

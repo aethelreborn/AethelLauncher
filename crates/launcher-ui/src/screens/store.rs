@@ -1,6 +1,8 @@
 use super::super::theme;
 use eframe::egui;
-use launcher_core::platform::{Cosmetic, Inventory, PlatformClient, PurchaseOutcome};
+use launcher_core::platform::{
+    Cosmetic, EquippedState, Inventory, PlatformClient, PurchaseOutcome,
+};
 
 pub use launcher_core::platform::Connection;
 use std::sync::mpsc::{channel, Receiver, TryRecvError};
@@ -16,6 +18,7 @@ pub enum StoreAction {
 enum StoreEvent {
     Catalogue(Vec<Cosmetic>),
     Inventory(Box<Inventory>),
+    Equipped(Box<EquippedState>),
     Connection(Connection),
     Error(String),
     Notice(String),
@@ -24,12 +27,16 @@ enum StoreEvent {
 pub struct StoreState {
     pub cosmetics: Vec<Cosmetic>,
     pub inventory: Inventory,
+    pub equipped: EquippedState,
     pub loading: bool,
     pub error: Option<String>,
     pub notice: Option<String>,
     connection: Connection,
     pub pending: Option<String>,
     pub kind_filter: Option<String>,
+    /// Set when the local equipped set changed, so the launcher can push the new
+    /// set to a running game session.
+    pub cosmetics_changed: bool,
     client: PlatformClient,
     rx: Option<Receiver<StoreEvent>>,
 }
@@ -49,15 +56,18 @@ impl StoreState {
     pub fn new(client: PlatformClient) -> Self {
         let cosmetics = client.cached_catalogue();
         let inventory = client.cached_inventory();
+        let equipped = client.equipped_state();
         Self {
             cosmetics,
             inventory,
+            equipped,
             loading: false,
             error: None,
             notice: None,
             connection: Connection::Unknown,
             pending: None,
             kind_filter: None,
+            cosmetics_changed: false,
             client,
             rx: None,
         }
@@ -174,15 +184,32 @@ impl StoreState {
         if self.pending.is_some() {
             return;
         }
-        if !self.client.is_signed_in() {
+        let signed_in = self.client.is_signed_in();
+        if !signed_in && action == Action::Buy {
             self.error =
                 Some("Sign in on the Account screen to buy and equip cosmetics.".to_string());
+            return;
+        }
+        if !signed_in && action == Action::Equip && self.cosmetics.iter().all(|c| c.slug != slug) {
+            self.error = Some("Unknown cosmetic.".to_string());
             return;
         }
 
         self.pending = Some(slug.to_string());
         self.error = None;
         self.notice = None;
+
+        // The local equipped set is the source of truth for the in-game client,
+        // so apply it (and hand it to the UI) before any network round-trip.
+        let local = match action {
+            Action::Equip => self.client.equip_local(slug),
+            Action::Unequip => self.client.unequip_local(slug),
+            Action::Buy => EquippedState::default(),
+        };
+        if action != Action::Buy {
+            self.equipped = local.clone();
+            self.cosmetics_changed = true;
+        }
 
         let (tx, rx) = channel();
         self.rx = Some(rx);
@@ -203,6 +230,17 @@ impl StoreState {
             runtime.block_on(async move {
                 match action {
                     Action::Equip | Action::Unequip => {
+                        let _ = tx.send(StoreEvent::Equipped(Box::new(local)));
+                        let verb = match action {
+                            Action::Unequip => "Unequipped",
+                            _ => "Equipped",
+                        };
+                        if !signed_in {
+                            let _ = tx.send(StoreEvent::Notice(format!(
+                                "{verb} {display_name} on this machine"
+                            )));
+                            return;
+                        }
                         let result = match action {
                             Action::Equip => client.equip(&slug).await,
                             _ => client.unequip(&slug).await,
@@ -210,10 +248,6 @@ impl StoreState {
                         match result {
                             Ok(inventory) => {
                                 let _ = tx.send(StoreEvent::Inventory(Box::new(inventory)));
-                                let verb = match action {
-                                    Action::Unequip => "Unequipped",
-                                    _ => "Equipped",
-                                };
                                 let _ =
                                     tx.send(StoreEvent::Notice(format!("{verb} {display_name}")));
                             }
@@ -284,6 +318,11 @@ impl StoreState {
                     self.inventory = *inventory;
                     self.pending = None;
                 }
+                StoreEvent::Equipped(state) => {
+                    self.equipped = *state;
+                    self.cosmetics_changed = true;
+                    self.pending = None;
+                }
                 StoreEvent::Connection(connection) => {
                     self.connection = connection;
                     if connection == Connection::Online {
@@ -304,7 +343,7 @@ impl StoreState {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Action {
     Equip,
     Unequip,
@@ -505,7 +544,8 @@ fn cosmetic_card(
     action: &mut Option<StoreAction>,
 ) {
     let owned = state.inventory.owns(&cosmetic.slug);
-    let equipped = state.inventory.is_equipped(&cosmetic.slug);
+    let equipped =
+        state.equipped.contains(&cosmetic.slug) || state.inventory.is_equipped(&cosmetic.slug);
     let busy = state.pending.as_deref() == Some(cosmetic.slug.as_str());
     let rarity = rarity_color(&cosmetic.rarity);
 
@@ -570,9 +610,12 @@ fn cosmetic_card(
                 return;
             }
 
+            // Free pieces can be worn locally without an account, so the in-game client has
+            // something to render offline.
+            let locally_wearable = !state.is_signed_in() && cosmetic.is_free();
             let (label, kind) = if equipped {
                 ("Unequip", theme::ButtonKind::Secondary)
-            } else if owned {
+            } else if owned || locally_wearable {
                 ("Equip", theme::ButtonKind::Success)
             } else if cosmetic.is_free() {
                 ("Claim", theme::ButtonKind::Success)
@@ -582,7 +625,7 @@ fn cosmetic_card(
 
             let affordable =
                 cosmetic.is_free() || state.inventory.balance_cents >= cosmetic.price_cents;
-            let enabled = owned || cosmetic.is_free() || affordable;
+            let enabled = owned || locally_wearable || cosmetic.is_free() || affordable;
 
             let response =
                 theme::button_sized(ui, label, kind, egui::vec2(width - 24.0, 30.0), enabled);
@@ -590,7 +633,7 @@ fn cosmetic_card(
             if response.clicked() {
                 if equipped {
                     *action = Some(StoreAction::Unequip(cosmetic.slug.clone()));
-                } else if owned {
+                } else if owned || locally_wearable {
                     *action = Some(StoreAction::Equip(cosmetic.slug.clone()));
                 } else {
                     *action = Some(StoreAction::Buy(cosmetic.slug.clone()));
@@ -598,6 +641,8 @@ fn cosmetic_card(
             }
             if !enabled {
                 response.on_hover_text("Not enough credits");
+            } else if locally_wearable {
+                response.on_hover_text("Equipped on this machine only");
             }
         });
     });

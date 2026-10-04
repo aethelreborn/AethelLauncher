@@ -16,6 +16,7 @@ pub fn api_base_url() -> String {
 
 const CACHE_FILE: &str = "cosmetics-cache.json";
 const SESSION_FILE: &str = "session.json";
+const EQUIPPED_FILE: &str = "equipped.json";
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct PlatformSession {
@@ -145,6 +146,65 @@ pub enum Connection {
     Unknown,
     Online,
     Offline,
+}
+
+/// One worn piece. `slot` mirrors the vanilla slot it renders in, so two capes
+/// can never be equipped at once and wings/elytra share one slot.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EquippedItem {
+    pub slug: String,
+    pub kind: String,
+    pub name: String,
+    pub asset_url: String,
+    pub slot: String,
+}
+
+/// The offline-first equipped set, mirrored to the in-game client over IPC and
+/// readable from `platform/equipped.json` by `aethel-cosmetics` directly.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EquippedState {
+    #[serde(default)]
+    pub items: Vec<EquippedItem>,
+    #[serde(default)]
+    pub updated_at: String,
+}
+
+impl EquippedState {
+    pub fn slot(&self, slot: &str) -> Option<&EquippedItem> {
+        self.items.iter().find(|i| i.slot == slot)
+    }
+
+    pub fn slugs(&self) -> Vec<String> {
+        self.items.iter().map(|i| i.slug.clone()).collect()
+    }
+
+    pub fn contains(&self, slug: &str) -> bool {
+        self.items.iter().any(|i| i.slug == slug)
+    }
+
+    pub fn documents(&self) -> Vec<serde_json::Value> {
+        self.items
+            .iter()
+            .map(|i| {
+                serde_json::json!({
+                    "slug": i.slug,
+                    "kind": i.kind,
+                    "name": i.name,
+                    "assetUrl": i.asset_url,
+                    "slot": i.slot,
+                })
+            })
+            .collect()
+    }
+}
+
+/// The vanilla slot a catalogue kind renders in.
+pub fn slot_for_kind(kind: &str) -> String {
+    match kind {
+        "cape" => "cape".to_string(),
+        "elytra" | "wings" => "wings".to_string(),
+        other => other.to_string(),
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -301,6 +361,7 @@ pub struct PlatformClient {
     http: reqwest::Client,
     cache_path: PathBuf,
     session_path: PathBuf,
+    equipped_path: PathBuf,
     session: Arc<parking_lot::RwLock<Option<PlatformSession>>>,
     catalogue: Arc<parking_lot::Mutex<Option<Vec<Cosmetic>>>>,
 }
@@ -332,9 +393,74 @@ impl PlatformClient {
             http,
             cache_path: platform_dir.join(CACHE_FILE),
             session_path,
+            equipped_path: platform_dir.join(EQUIPPED_FILE),
             session: Arc::new(parking_lot::RwLock::new(session)),
             catalogue: Arc::new(parking_lot::Mutex::new(None)),
         }
+    }
+
+    pub fn equipped_path(&self) -> &Path {
+        &self.equipped_path
+    }
+
+    pub fn equipped_state(&self) -> EquippedState {
+        std::fs::read_to_string(&self.equipped_path)
+            .ok()
+            .and_then(|raw| serde_json::from_str(&raw).ok())
+            .unwrap_or_default()
+    }
+
+    pub fn equipped_documents(&self) -> Vec<serde_json::Value> {
+        self.equipped_state().documents()
+    }
+
+    fn write_equipped(&self, state: &EquippedState) -> EquippedState {
+        let mut state = state.clone();
+        state.updated_at = chrono::Utc::now().to_rfc3339();
+        if let Some(parent) = self.equipped_path.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        match serde_json::to_vec_pretty(&state) {
+            Ok(raw) => {
+                if let Err(e) = std::fs::write(&self.equipped_path, raw) {
+                    tracing::debug!("could not persist equipped cosmetics: {e}");
+                }
+            }
+            Err(e) => tracing::debug!("could not serialise equipped cosmetics: {e}"),
+        }
+        state
+    }
+
+    fn item_from_catalogue(&self, slug: &str) -> Option<EquippedItem> {
+        self.cached_catalogue()
+            .into_iter()
+            .find(|c| c.slug == slug)
+            .map(|c| EquippedItem {
+                slug: c.slug.clone(),
+                kind: c.kind.clone(),
+                name: c.name.clone(),
+                asset_url: c.asset_url.clone(),
+                slot: slot_for_kind(&c.kind),
+            })
+    }
+
+    /// Equips locally (one piece per slot) without a backend round-trip, so the
+    /// in-game client can render cosmetics offline.
+    pub fn equip_local(&self, slug: &str) -> EquippedState {
+        let Some(item) = self.item_from_catalogue(slug) else {
+            return self.equipped_state();
+        };
+        let mut state = self.equipped_state();
+        state.items.retain(|i| i.slot != item.slot);
+        state.items.push(item);
+        state.items.sort_by(|a, b| a.slot.cmp(&b.slot));
+        self.write_equipped(&state)
+    }
+
+    pub fn unequip_local(&self, slug: &str) -> EquippedState {
+        let mut state = self.equipped_state();
+        state.items.retain(|i| i.slug != slug);
+        self.write_equipped(&state)
     }
 
     pub fn base_url(&self) -> &str {
@@ -897,6 +1023,74 @@ mod tests {
             ..session_expiring_in(3600)
         };
         assert!(broken.access_expired());
+    }
+
+    #[test]
+    fn local_equip_replaces_the_slot_and_persists() {
+        let dir = tempfile::tempdir().unwrap();
+        let client = PlatformClient::new(dir.path());
+
+        let state = client.equip_local("cape-aethel");
+        assert!(state.contains("cape-aethel"));
+        assert_eq!(
+            state.slot("cape").map(|i| i.slug.as_str()),
+            Some("cape-aethel")
+        );
+
+        let state = client.equip_local("cape-ember");
+        assert!(state.contains("cape-ember"));
+        assert!(!state.contains("cape-aethel"), "one cape per slot");
+        assert_eq!(state.items.len(), 1);
+
+        let state = client.equip_local("wings-void");
+        assert_eq!(state.items.len(), 2, "wings do not touch the cape slot");
+        assert_eq!(
+            state.slot("wings").map(|i| i.slug.as_str()),
+            Some("wings-void")
+        );
+
+        let reloaded = PlatformClient::new(dir.path()).equipped_state();
+        assert_eq!(reloaded.slugs(), state.slugs());
+        assert!(reloaded.updated_at.contains('T'));
+
+        let state = client.unequip_local("cape-ember");
+        assert!(!state.contains("cape-ember"));
+        assert!(state.contains("wings-void"), "other slots survive");
+        client.unequip_local("wings-void");
+        assert!(PlatformClient::new(dir.path())
+            .equipped_state()
+            .items
+            .is_empty());
+    }
+
+    #[test]
+    fn equipped_documents_carry_what_the_mod_needs() {
+        let dir = tempfile::tempdir().unwrap();
+        let client = PlatformClient::new(dir.path());
+        client.equip_local("elytra-dragon");
+        let docs = client.equipped_documents();
+        assert_eq!(docs.len(), 1);
+        assert_eq!(docs[0]["slug"], "elytra-dragon");
+        assert_eq!(docs[0]["slot"], "wings");
+        assert_eq!(docs[0]["kind"], "elytra");
+        assert_eq!(docs[0]["assetUrl"], "elytras/dragon.png");
+    }
+
+    #[test]
+    fn slots_follow_the_catalogue_kind() {
+        assert_eq!(slot_for_kind("cape"), "cape");
+        assert_eq!(slot_for_kind("elytra"), "wings");
+        assert_eq!(slot_for_kind("wings"), "wings");
+        assert_eq!(slot_for_kind("skin"), "skin");
+        assert_eq!(slot_for_kind("hud"), "hud");
+    }
+
+    #[test]
+    fn local_equip_ignores_unknown_slugs() {
+        let dir = tempfile::tempdir().unwrap();
+        let client = PlatformClient::new(dir.path());
+        let state = client.equip_local("cape-does-not-exist");
+        assert!(state.items.is_empty());
     }
 
     #[test]

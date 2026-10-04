@@ -81,6 +81,9 @@ pub struct LaunchController {
     pub started_at: Option<std::time::Instant>,
     pub last_perf: Option<launcher_core::perf::PerfReport>,
     crashed: bool,
+    /// Set once a session connects, so the equipped cosmetics are pushed as soon
+    /// as the in-game client is listening.
+    needs_cosmetics_push: bool,
     pub ipc: Option<IpcConnection>,
     pub in_game: bool,
     pub game_fps: Option<f32>,
@@ -118,10 +121,29 @@ impl LaunchController {
             started_at: None,
             last_perf: None,
             crashed: false,
+            needs_cosmetics_push: false,
             ipc: None,
             in_game: false,
             game_fps: None,
         }
+    }
+
+    /// True once per session, right after the game connects its IPC socket.
+    pub fn take_needs_cosmetics_push(&mut self) -> bool {
+        std::mem::take(&mut self.needs_cosmetics_push)
+    }
+
+    /// Sends the equipped cosmetics to the in-game client. Returns true when a
+    /// frame went out, so the caller can log or clear its dirty flag.
+    pub fn push_cosmetics(&mut self, items: Vec<serde_json::Value>) -> bool {
+        let Some(conn) = self.ipc.as_ref() else {
+            return false;
+        };
+        let sent = conn.handle.push_cosmetics(items);
+        if sent {
+            self.push_console("[ipc] cosmetics pushed to game".to_string());
+        }
+        sent
     }
 
     pub fn is_active(&self) -> bool {
@@ -260,6 +282,7 @@ impl LaunchController {
         match event {
             IpcEvent::Connected { session_id } => {
                 self.push_console(format!("[ipc] session {session_id}"));
+                self.needs_cosmetics_push = true;
             }
             IpcEvent::Launched {
                 renderer,
@@ -340,13 +363,19 @@ fn run_launch(request: LaunchRequest, tx: Sender<LaunchEvent>, stop: Arc<tokio::
             performance: request.performance,
         };
 
-        let prepared = match prepare(&options, &sink).await {
+        let mut prepared = match prepare(&options, &sink).await {
             Ok(p) => p,
             Err(e) => {
                 let _ = tx.send(LaunchEvent::Failed(format!("{e:#}")));
                 return;
             }
         };
+
+        // The in-game client reads the equipped cosmetics from the shared data dir when it boots.
+        prepared
+            .args
+            .jvm_args
+            .push(format!("-Daethel.home={}", request.shared_dir.display()));
 
         let _ = tx.send(LaunchEvent::Log(format!(
             "Java: {}",

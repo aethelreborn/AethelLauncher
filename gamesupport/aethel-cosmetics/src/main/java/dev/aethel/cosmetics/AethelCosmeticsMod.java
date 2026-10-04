@@ -2,52 +2,46 @@ package dev.aethel.cosmetics;
 
 import dev.aethel.ipc.IpcBootstrap;
 import dev.aethel.ipc.IpcClient;
-import java.util.ArrayList;
-import java.util.Collections;
-import java.util.List;
 import net.fabricmc.api.ClientModInitializer;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+/**
+ * Applies store cosmetics in-game. The launcher writes {@code platform/equipped.json} and pushes the
+ * same documents over IPC; the cape and wings renderers read them from {@link CosmeticsState}.
+ */
 public final class AethelCosmeticsMod implements ClientModInitializer {
+
     public static final Logger LOGGER = LoggerFactory.getLogger("aethel-cosmetics");
 
-    private static final List<String> equipped = Collections.synchronizedList(new ArrayList<>());
-    private static volatile String sessionId;
     private static IpcClient ipc;
-
-    public static List<String> equippedItems() {
-        synchronized (equipped) {
-            return new ArrayList<>(equipped);
-        }
-    }
-
-    public static String sessionId() {
-        return sessionId;
-    }
 
     @Override
     public void onInitializeClient() {
+        CosmeticsState.loadFromLauncherHome(System.getProperty("aethel.home"));
+        if (CosmeticsState.capeIdentifier() != null || CosmeticsState.wingsIdentifier() != null) {
+            LOGGER.info("equipped cosmetics ready (cape={}, wings={})",
+                    CosmeticsState.capeIdentifier(), CosmeticsState.wingsIdentifier());
+        }
+
         ipc = IpcBootstrap.connect(new IpcClient.Listener() {
             @Override
-            public void onWelcome(String id) {
-                sessionId = id;
-                LOGGER.info("launcher IPC up (session {})", id);
+            public void onWelcome(String sessionId) {
+                LOGGER.info("launcher IPC up (session {})", sessionId);
             }
 
             @Override
             public void onMessage(String type, String raw) {
                 if ("cosmetics".equals(type)) {
-                    equipped.clear();
-                    equipped.add(raw);
-                    LOGGER.info("cosmetics push received");
+                    CosmeticsState.load(raw);
+                    LOGGER.info("cosmetics push applied (cape={}, wings={})",
+                            CosmeticsState.capeIdentifier(), CosmeticsState.wingsIdentifier());
                 }
             }
 
             @Override
             public void onClosed() {
-                sessionId = null;
-                equipped.clear();
+                LOGGER.info("launcher IPC closed");
             }
         });
 
